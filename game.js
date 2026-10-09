@@ -135,6 +135,7 @@ function initializeFactions(start) {
   state='playing';$('placement').classList.add('hidden');$('gameStatus').textContent='EROBERUNG LÄUFT';$('mapHint').textContent='Klicke auf ein benachbartes Land, um einen Angriff zu starten';
   addEvent('Deine Republik wurde gegründet.',0);
   addEvent((activeCount-1)+' Nationen betreten die Welt.',-1);
+  updateUI();
   toast('Erobere neutrales Land. Schütze dein Reich.');
 }
 function fitMap() {
@@ -192,16 +193,42 @@ function borderTarget(p,i) {
   }
   return best;
 }
-function attack(p,i,fraction) {
+function coastal(i) {return neighbour(i).some(j=>owner[j]===-2);}
+function landingSite(p,i) {
+  // A naval landing needs a coastal tile of the selected nation and a coastal departure tile.
+  const desired=owner[i],tx=i%W,ty=Math.floor(i/W);
+  let beach=-1,dist=Infinity;
+  for(let j=0;j<N;j++)if(owner[j]===desired&&coastal(j)) {
+    const d=(j%W-tx)**2+(Math.floor(j/W)-ty)**2;
+    if(d<dist){dist=d;beach=j;}
+  }
+  if(beach<0)return null;
+  let source=-1;dist=Infinity;const bx=beach%W,by=Math.floor(beach/W);
+  for(let j=0;j<N;j++)if(owner[j]===p&&coastal(j)) {
+    const d=(j%W-bx)**2+(Math.floor(j/W)-by)**2;
+    if(d<dist){dist=d;source=j;}
+  }
+  return source<0?null:{beach,distance:Math.sqrt(dist)};
+}
+function attack(p,i,fraction,allowNaval=false) {
   if(!areas[p]||owner[i]===-2||owner[i]===p)return false;
   if(fronts.filter(f=>f.p===p).length>= (p===0?4:2))return false;
-  const target=borderTarget(p,i);
+  let target=borderTarget(p,i),landing=null;
+  if(target<0&&allowNaval&&armies[p]>=1250) {
+    landing=landingSite(p,i);
+    if(landing)target=landing.beach;
+  }
   if(target<0)return false;
-  const troops=Math.floor(armies[p]*fraction);
-  if(troops<35)return false;
-  armies[p]-=troops;
-  fronts.push({p,enemy:owner[target],origin:target,queue:[target],seen:new Set(),troops,initial:troops,x:target%W,y:Math.floor(target/W),age:0});
-  if(p===0){const def=owner[target];addEvent('Offensive auf '+(def<0?'neutrales Gebiet':names[def])+' gestartet.',0);}
+  const allocation=Math.floor(armies[p]*fraction),cost=landing?220:0;
+  const troops=allocation-cost;
+  if(troops<(landing?220:35))return false;
+  armies[p]-=allocation;
+  fronts.push({p,enemy:owner[target],origin:target,queue:[target],seen:new Set(),troops,initial:troops,x:target%W,y:Math.floor(target/W),age:0,naval:!!landing,arrival:landing?3+landing.distance/16:0,landed:false});
+  if(p===0) {
+    const def=owner[target];
+    addEvent((landing?'Flotte zur Landung bei ':'Offensive gegen ')+(def<0?'unbesetztes Land':names[def])+' entsandt.',0);
+    if(landing)toast('Invasionsflotte unterwegs: '+Math.ceil(3+landing.distance/16)+' Sekunden.');
+  }
   return true;
 }
 function endFront(f) {
@@ -210,26 +237,28 @@ function endFront(f) {
 }
 function processFront(f) {
   f.age+=.16;
+  if(f.arrival>0){f.arrival-=.16;return;}
   let moved=0,attempt=0;
   while(f.queue.length&&attempt++<13&&moved<5) {
     const i=f.queue.shift();
     if(f.seen.has(i)||owner[i]===-2||owner[i]===f.p)continue;
     f.seen.add(i);
     if(owner[i]!==f.enemy)continue;
-    if(!neighbour(i).some(j=>owner[j]===f.p))continue;
+    if(!neighbour(i).some(j=>owner[j]===f.p)&&!(f.naval&&!f.landed&&i===f.origin))continue;
     let victim=owner[i],cost;
     if(victim===-1)cost=8+(height[i]>175?4:0);
     else {
       const density=armies[victim]/Math.max(1,areas[victim]);
       cost=17+clamp(density*2.1,0,115)+fort[i]*35+(height[i]>175?7:0);
     }
+    if(f.naval&&!f.landed)cost*=1.8;
     if(f.troops<cost){f.queue.length=0;break;}
     f.troops-=cost;
     if(victim>=0) {
       armies[victim]=Math.max(0,armies[victim]-cost*.5);
       if(areas[victim]===1&&f.p===0)addEvent(names[victim]+' steht vor dem Zusammenbruch.',victim);
     }
-    capture(i,f.p);f.x=i%W;f.y=Math.floor(i/W);moved++;
+    capture(i,f.p);f.landed=true;f.x=i%W;f.y=Math.floor(i/W);moved++;
     if(effects.length<180)effects.push({x:f.x+.5,y:f.y+.5,p:f.p,life:1});
     for(const j of neighbour(i))if(!f.seen.has(j)&&owner[j]===f.enemy)f.queue.push(j);
   }
@@ -245,7 +274,13 @@ function aiStep() {
     for(let i=0;i<N;i++)if(owner[i]===p)for(const j of neighbour(i))if(owner[j]!==p&&owner[j]!==-2&&!seen.has(j)) {
       seen.add(j);options.push(j);
     }
-    if(!options.length)continue;
+    if(!options.length) {
+      if(armies[p]>1350) {
+        const abroad=landIndices.filter(i=>owner[i]!==p&&owner[i]!==-2&&coastal(i));
+        if(abroad.length)attack(p,abroad[Math.random()*abroad.length|0],.72,true);
+      }
+      continue;
+    }
     let best=-1,score=-1e9;
     for(let tries=0;tries<Math.min(50,options.length);tries++) {
       const i=options[Math.random()*options.length|0],foe=owner[i],noise=Math.random()*14;
@@ -319,7 +354,7 @@ function updateIntel() {
 function setMode(next) {
   mode=next;
   document.querySelectorAll('.mode').forEach(b=>b.classList.toggle('active',b.dataset.mode===next));
-  $('tip').textContent=next==='attack'?'Klicke auf ein fremdes Gebiet. Es muss eine gemeinsame Grenze bestehen. Deine Offensive breitet sich über die Front aus.':next==='expand'?'Expandiere nur in neutrale Gebiete. Eine schnelle Expansion bringt mehr Wachstum, kostet aber Truppen.':'Klicke auf ein eigenes Gebiet, um es für 180 Truppen zu befestigen. Jede Stufe erhöht die gegnerischen Eroberungskosten.';
+  $('tip').textContent=next==='attack'?'Klicke auf ein fremdes Gebiet. Es muss eine gemeinsame Grenze bestehen. Deine Offensive breitet sich über die Front aus.':next==='expand'?'Expandiere nur in neutrale Gebiete. Eine schnelle Expansion bringt mehr Wachstum, kostet aber Truppen.':next==='fortify'?'Klicke auf ein eigenes Gebiet, um es für 180 Truppen zu befestigen. Jede Stufe erhöht die gegnerischen Eroberungskosten.':'Seeinvasion: Klicke auf einen fremden Küstenstaat. Mindestens 1.250 Truppen werden benötigt, 220 gehen für Schiffe verloren. Die Landung dauert mehrere Sekunden.';
 }
 function onMapClick(i) {
   if(owner[i]===-2){toast('Hier ist Wasser. Wähle eine Landfläche.',true);return;}
@@ -333,7 +368,7 @@ function onMapClick(i) {
   }
   if(mode==='expand'&&owner[i]!==-1){toast('Expansionsmodus: nur neutrales Gebiet.',true);return;}
   if(owner[i]===0){toast('Klicke außerhalb deines Reiches auf eine benachbarte Nation.');return;}
-  if(!attack(0,i,ratio))toast('Keine gemeinsame Grenze oder zu wenige freie Truppen.',true);
+  if(!attack(0,i,ratio,mode==='naval'))toast(mode==='naval'?'Invasion unmöglich: Küste oder genügend Truppen fehlen.':'Keine gemeinsame Grenze oder zu wenige freie Truppen.',true);
   updateUI();
 }
 function tileAt(x,y) {
@@ -385,7 +420,7 @@ function prepareFrame() {
     const r=7+(Math.sin(performance.now()*.007+f.p)*.5+.5)*6;
     ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.strokeStyle=colors[f.p];ctx.lineWidth=2.1;ctx.stroke();
     ctx.fillStyle='#061923cf';ctx.fillRect(x-22,y-26,44,15);
-    ctx.fillStyle='#f0f6fa';ctx.font='700 10px DM Sans';ctx.textAlign='center';ctx.fillText(format(f.troops),x,y-15);
+    ctx.fillStyle='#f0f6fa';ctx.font='700 10px DM Sans';ctx.textAlign='center';ctx.fillText(f.arrival>0?Math.ceil(f.arrival)+'s':format(f.troops),x,y-15);
   }
   for(const e of effects) {
     const x=camera.x+e.x*camera.z,y=camera.y+e.y*camera.z;
@@ -477,6 +512,7 @@ document.addEventListener('keydown',e=>{
   if(e.code==='Digit1')setMode('attack');
   if(e.code==='Digit2')setMode('expand');
   if(e.code==='Digit3')setMode('fortify');
+  if(e.code==='Digit4')setMode('naval');
   if(e.code==='Space')$('pauseBtn').click();
   if(e.code==='KeyF')$('fullBtn').click();
   if(e.code==='Equal'||e.code==='NumpadAdd')$('zoomIn').click();
