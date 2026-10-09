@@ -47,9 +47,9 @@ Die drei Dateien **index.html**, **styles.css** und **game.js** in einen Ordner 
 
 Optional aus dem Repo-Verzeichnis:
 
-\`\`\`bash
+```bash
 python -m http.server 8000
-\`\`\`
+```
 
 Danach http://localhost:8000 öffnen. Alternativ kann man die Site direkt über GitHub Pages spielen.
 
@@ -57,9 +57,9 @@ Danach http://localhost:8000 öffnen. Alternativ kann man die Site direkt über 
 
 Ohne Installation externer Dependencies:
 
-\`\`\`bash
+```bash
 node --test tests/smoke.test.cjs
-\`\`\`
+```
 
 Der Smoke-Test prüft die Startsequenz, KI-Erstellung, Wirtschafts-Ticks und Gebietseroberung in einer vereinfachten DOM-/Canvas-Testumgebung. **Er ersetzt keinen Browser- oder Balancing-Test.**
 
